@@ -1,28 +1,27 @@
 // TODO: Put public facing types in this file.
 
+import 'package:built_collection/built_collection.dart';
+import 'package:built_value/built_value.dart';
+
+import 'common_vocab.dart';
+
+part 'rdf_base.g.dart';
+
 /// Checks if you are awesome. Spoiler: you are.
-
-const stringDataType = NamedNode("http://www.w3.org/2001/XMLSchema#string");
-const intDataType = NamedNode("http://www.w3.org/2001/XMLSchema#integer");
-const doubleDataType = NamedNode("http://www.w3.org/2001/XMLSchema#double");
-const decimalDataType = NamedNode("http://www.w3.org/2001/XMLSchema#decimal");
-const booleanDataType = NamedNode("http://www.w3.org/2001/XMLSchema#boolean");
-const langStringDataType =
-    NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#langString");
-const typeDataType =
-    NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-
-enum TermType {
-  defaultGraph,
-  literal,
-  quad,
-  namedNode,
-  blankNode,
-  variable,
+/// A visitor that is used for traversing an RDF dataset.
+class TermVisitor {
+  bool visitQuad(Quad quad) => false;
+  bool visitBlankNode(BlankNodeGraph graph) => false;
+  bool visitBlankNodeLabel(BlankNodeLabel label) => false;
+  bool visitNamedNode(NamedNode value) => false;
+  bool visitLiteral(LiteralTerm value) => false;
+  bool visitDefaultGraph() => false;
 }
 
 abstract class Term {
   String get value;
+
+  bool accept(TermVisitor visitor);
 }
 
 class DefaultGraph implements Term {
@@ -40,151 +39,137 @@ class DefaultGraph implements Term {
   String toString() {
     return ".";
   }
-}
-
-class LiteralTerm implements Term {
-  @override
-  String value;
-
-  final String? language;
-  final NamedNode dataType;
-
-  LiteralTerm.fromString(
-    this.value,
-  )   : dataType = stringDataType,
-        language = null;
-
-  LiteralTerm.languageString(
-    this.value,
-    this.language,
-  ) : dataType = langStringDataType;
-
-  LiteralTerm.fromInt(int value)
-      : value = value.toString(),
-        language = null,
-        dataType = intDataType;
-
-  LiteralTerm.fromDataType(this.value, this.dataType) : language = null;
-
-  LiteralTerm.fromDouble(num value)
-      : language = null,
-        dataType = doubleDataType,
-        value = value.toString();
-
-  LiteralTerm.fromDecimal(num value)
-      : language = null,
-        dataType = decimalDataType,
-        value = value.toString();
-
-  LiteralTerm.fromBool(bool value)
-      : language = null,
-        dataType = booleanDataType,
-        value = value.toString();
 
   @override
-  bool operator ==(Object other) {
-    if (other is! LiteralTerm) {
-      return false;
-    }
-    return value == value && language == language && dataType == dataType;
+  bool accept(TermVisitor visitor) {
+    return visitor.visitDefaultGraph();
   }
-
-  @override
-  int get hashCode => Object.hash(value, language, dataType);
 }
 
-class NamedNode implements Term {
-  final String iri;
+abstract class LiteralTerm
+    implements Term, Built<LiteralTerm, LiteralTermBuilder> {
+  @override
+  String get value;
+
+  String? get language;
+  NamedNode get dataType;
+
+  factory LiteralTerm.fromString(
+    String value,
+  ) =>
+      _$LiteralTerm._(
+          value: value, dataType: NamedNode(Xsd.string), language: null);
+
+  factory LiteralTerm.languageString(String value, String language) =>
+      _$LiteralTerm._(
+          value: value,
+          language: language,
+          dataType: NamedNode(Rdf.langString));
+
+  factory LiteralTerm.fromInt(int value) => _$LiteralTerm._(
+      value: value.toString(),
+      language: null,
+      dataType: NamedNode(Xsd.integer));
+
+  factory LiteralTerm.fromDataType(String value, NamedNode dataType) =>
+      _$LiteralTerm._(language: null, value: value, dataType: dataType);
+
+  factory LiteralTerm.fromDouble(num value) => _$LiteralTerm._(
+      language: null, dataType: NamedNode(Xsd.double), value: value.toString());
+
+  factory LiteralTerm.fromDecimal(num value) => _$LiteralTerm._(
+      language: null,
+      dataType: NamedNode(Xsd.decimal),
+      value: value.toString());
+
+  factory LiteralTerm.fromBool(bool value) => _$LiteralTerm._(
+      language: null,
+      dataType: NamedNode(Xsd.boolean),
+      value: value.toString());
+
+  LiteralTerm._();
+
+  @override
+  bool accept(TermVisitor v) => v.visitLiteral(this);
+}
+
+abstract class NamedNode implements Term, Built<NamedNode, NamedNodeBuilder> {
+  String get iri;
 
   @override
   String get value => iri;
 
-  const NamedNode(this.iri);
+  factory NamedNode(String iri) => _$NamedNode._(iri: iri);
+  NamedNode._();
 
   @override
-  bool operator ==(Object other) {
-    if (other is! NamedNode) {
-      return false;
-    }
-    return iri == other.iri;
-  }
-
-  @override
-  int get hashCode => iri.hashCode;
+  bool accept(TermVisitor v) => v.visitNamedNode(this);
 }
 
-class BlankNode implements Term {
+abstract class BlankNodeLabel
+    implements Term, Built<BlankNodeLabel, BlankNodeLabelBuilder> {
   @override
-  final String value;
+  String get value;
 
-  BlankNode(this.value);
-
-  @override
-  bool operator ==(Object other) {
-    if (other is! BlankNode) {
-      return false;
-    }
-    return value == other.value;
-  }
+  factory BlankNodeLabel(String value) => _$BlankNodeLabel._(value: value);
+  BlankNodeLabel._();
 
   @override
-  int get hashCode => value.hashCode;
+  bool accept(TermVisitor v) => v.visitBlankNodeLabel(this);
 }
 
-class Variable implements Term {
-  @override
-  final String value;
-
-  Variable(this.value);
-
-  @override
-  bool operator ==(Object other) {
-    if (other is! Variable) {
-      return false;
-    }
-    return value == other.value;
-  }
-
-  int get hashCode => value.hashCode;
-}
-
-class Quad implements Term {
+abstract class BlankNodeGraph
+    implements Term, Built<BlankNodeGraph, BlankNodeGraphBuilder> {
   @override
   String get value => "";
 
-  Term subject;
-  Term predicate;
-  Term object;
-  Term graph;
+  BuiltList<PredicateObject> get entries;
 
-  Quad(this.subject, this.predicate, this.object)
-      : graph = DefaultGraph.defaultGraph;
-  Quad.withGraph(this.subject, this.predicate, this.object, this.graph);
+  factory BlankNodeGraph(Iterable<PredicateObject> entries) =>
+      _$BlankNodeGraph._(entries: BuiltList.from(entries));
+  BlankNodeGraph._();
 
   @override
-  bool operator ==(Object other) {
-    if (other is! Quad) {
-      return false;
-    }
-    return subject == other.subject &&
-        predicate == other.predicate &&
-        object == other.object &&
-        graph == other.graph;
-  }
-
-  @override
-  int get hashCode => Object.hash(subject, predicate, object, graph);
-
-  @override
-  String toString() {
-    return subject.value +
-        " " +
-        predicate.value +
-        " " +
-        object.value +
-        " " +
-        graph.toString();
-  }
+  bool accept(TermVisitor v) => v.visitBlankNode(this);
 }
 
-class RdfDataset {}
+abstract class PredicateObject
+    implements Built<PredicateObject, PredicateObjectBuilder> {
+  Term get predicate;
+  Term get object;
+
+  PredicateObject._();
+  factory PredicateObject(Term predicate, Term object) =>
+      _$PredicateObject._(predicate: predicate, object: object);
+}
+
+abstract class Variable implements Term, Built<Variable, VariableBuilder> {
+  @override
+  String get value;
+
+  factory Variable(String value) => _$Variable._(value: value);
+  Variable._();
+
+  @override
+  bool accept(TermVisitor v) => throw Exception("unimplemented");
+}
+
+abstract class Quad implements Term, Built<Quad, QuadBuilder> {
+  @override
+  String get value => "";
+
+  Term get subject;
+  Term get predicate;
+  Term get object;
+  Term get graph;
+
+  factory Quad(Term subject, Term predicate, Term object) => _$Quad._(
+      subject: subject,
+      predicate: predicate,
+      object: object,
+      graph: DefaultGraph());
+  Quad._();
+
+  @override
+  bool accept(TermVisitor v) => v.visitQuad(this);
+}

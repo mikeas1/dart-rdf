@@ -3,7 +3,8 @@ import 'package:petitparser/petitparser.dart';
 class TurtleDefinition extends GrammarDefinition {
   @override
   Parser start() => ref0(statement).trim(ref0(space)).star().end();
-  Parser statement() => ref0(directive) | (ref0(triples) & char('.').trim());
+  Parser statement() =>
+      ref0(directive) | (ref0(triples) & ref1(token, '.')).pick(0);
   Parser directive() =>
       ref0(prefixID) | ref0(base) | ref0(sparqlPrefix) | ref0(sparqlBase);
   Parser prefixID() =>
@@ -11,17 +12,13 @@ class TurtleDefinition extends GrammarDefinition {
       ref2(token, ref0(pNameNs), "prefix namespace") &
       ref0(iriRef) &
       ref1(token, '.');
-  Parser base() =>
-      ref1(token, '@base') &
-      ref2(token, ref0(iriRef), "base IRI") &
-      ref1(token, '.');
+  Parser base() => ref1(token, '@base') & ref0(iriRef) & ref1(token, '.');
   Parser sparqlBase() =>
-      ref2(token, stringIgnoreCase("base"), "base") &
-      ref2(token, ref0(iriRef), "base IRI");
+      ref2(token, stringIgnoreCase("base"), "base") & ref0(iriRef);
   Parser sparqlPrefix() =>
       ref2(token, stringIgnoreCase("prefix"), "prefix") &
       ref2(token, ref0(pNameNs), "prefix name") &
-      ref2(token, ref0(iriRef), "prefix IRI");
+      ref0(iriRef);
   Parser triples() =>
       (ref0(subject).trim() & ref0(predicateObjectList).trim()) |
       (ref0(blankNodePropertyList).trim() &
@@ -46,18 +43,17 @@ class TurtleDefinition extends GrammarDefinition {
   Parser blankNodePropertyList() =>
       ref1(token, '[') & ref0(predicateObjectList) & ref1(token, ']');
   Parser collection() =>
-      ref1(token, '(') & ref0(object).star() & ref1(token, ')');
-  Parser numericLiteral() => ref0(integer) | ref0(double) | ref0(decimal);
+      ref1(token, '(') & ref0(object).trim().star() & ref1(token, ')');
+  Parser numericLiteral() => ref0(double) | ref0(decimal) | ref0(integer);
   Parser rdfLiteral() =>
       ref0(stringLiteral) &
-      // Make our life slightly easier by skipping the "^^".
-      (ref0(langTag) | (string('^^') & ref0(iri)).pick(1)).optional();
+      (ref0(langTag) | (string('^^') & ref0(iri))).optional();
   Parser booleanLiteral() => string('true') | string('false');
   Parser stringLiteral() =>
-      ref0(stringLiteralQuote) |
-      ref0(stringLiteralSingleQuote) |
       ref0(stringLiteralLongSingleQuote) |
-      ref0(stringLiteralLongQuote);
+      ref0(stringLiteralLongQuote) |
+      ref0(stringLiteralQuote) |
+      ref0(stringLiteralSingleQuote);
   Parser iri() => ref0(iriRef) | ref0(prefixedName);
   Parser prefixedName() => ref0(pNameLn) | ref0(pNameNs);
   Parser blankNode() => ref0(blankNodeLabel) | ref0(anon);
@@ -79,9 +75,10 @@ class TurtleDefinition extends GrammarDefinition {
       char('@') &
       (pattern('a-zA-Z').plus() & (char('-') & pattern('a-zA-Z').plus()).star())
           .flatten();
-  Parser integer() => (pattern('-+') & digit().plus()).flatten().trim();
+  Parser integer() =>
+      (pattern('-+').optional() & digit().plus()).flatten().trim();
   Parser decimal() =>
-      (pattern('-+') & digit().star() & char('.') & digit().plus())
+      (pattern('-+').optional() & digit().star() & char('.') & digit().plus())
           .flatten()
           .trim();
   Parser double() => (pattern('-+').optional() &
@@ -96,27 +93,26 @@ class TurtleDefinition extends GrammarDefinition {
       char('"') &
       (pattern('^\u{22}\u{5C}\u{0A}\u{D}') | ref0(echar) | ref0(uchar))
           .star()
-          .flatten() &
+          .map((each) => each.join()) &
       char('"');
   Parser stringLiteralSingleQuote() =>
       char("'") &
       (pattern('^\u{27}\u{5C}\u{0A}\u{D}') | ref0(echar) | ref0(uchar))
           .star()
-          .flatten() &
+          .map((each) => each.join()) &
       char("'");
   Parser stringLiteralLongSingleQuote() =>
       string("'''") &
-      ((char("'") | string("''")).optional() &
-              (pattern("^'\\") | ref0(echar) | ref0(uchar)))
-          .star()
-          .flatten() &
+      (pattern("^\\") | ref0(echar) | ref0(uchar))
+          .starLazy(string("'''"))
+          .map((each) => each.join()) &
       string("'''");
   Parser stringLiteralLongQuote() =>
       string('"""') &
-      ((char('"') | string('""')).optional() &
-              (pattern('^"\\') | ref0(echar) | ref0(uchar)))
-          .star()
-          .flatten() &
+      // Note: diverging from official grammar. starLazy() ensures we stop
+      // at triple quote boundary.
+      (pattern('^\\') | ref0(echar) | ref0(uchar)).starLazy(string('"""')).map(
+          (each) => each.join()) & // Join, don't flatten to respect escaping.
       string('"""');
   Parser uchar() =>
       (char('\\') & char('x') & ref0(hex).repeat(3).flatten()) |
@@ -157,14 +153,14 @@ class TurtleDefinition extends GrammarDefinition {
           ((ref0(pnChars) | char('.') | char(':') | ref0(plx))
                       .starGreedy(ref0(pnChars) | char(':') | ref0(plx)) &
                   (ref0(pnChars) | char(':') | ref0(plx)))
-              .optionalWith(["beepboop"]))
+              .optional())
       .flatten();
   Parser plx() => ref0(percent) | ref0(pnLocalEsc);
   Parser percent() => char('%') & (ref0(hex) & ref0(hex)).flatten();
   Parser hex() => pattern('a-f0-9A-F');
   Parser pnLocalEsc() => char('\\') & pattern('-_~.!\$&\'()*+,;=/?#@%');
-  Parser comment() => char('#') & Token.newlineParser().neg().star();
-  Parser space() => whitespace();
+  Parser comment() => ref1(token, '#') & Token.newlineParser().neg().star();
+  Parser space() => whitespace() | ref0(comment);
 
   Parser token(Object source, [String? name]) {
     if (source is String) {

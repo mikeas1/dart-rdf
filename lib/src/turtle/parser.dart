@@ -1,13 +1,10 @@
 import 'grammar.dart';
 import 'package:petitparser/petitparser.dart';
+import 'package:built_collection/built_collection.dart';
 import '../rdf_base.dart';
-
-const _rdfNil = NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil");
-const _rdfFirst = NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
-const _rdfRest = NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
+import '../common_vocab.dart';
 
 class ParserState {
-  String? _baseIri;
   String? _basePath;
   String? _baseRoot;
   String? _baseScheme;
@@ -18,31 +15,34 @@ class ParserState {
     // TODO(mikeas1): This may not work with all forms of IRIs. Could fall back
     // to regex-based loose parsing since not all semantics of the URI class are
     // needed.
-    final baseURI = Uri.parse(baseIRI);
-    _baseIri = baseURI.removeFragment().toString();
-    _basePath = baseURI
-        .replace(fragment: "", query: "", queryParameters: {}).toString();
-    _baseScheme = baseURI.scheme;
-    _baseRoot = "${baseURI.origin}/${baseURI.path}";
+    var parsed = Uri.parse(baseIRI).removeFragment();
+    _basePath = Uri(
+      host: parsed.host,
+      path: parsed.path,
+      scheme: parsed.scheme,
+    ).toString();
+    _baseScheme = parsed.scheme;
+    _baseRoot = "${parsed.origin}/${parsed.path}";
   }
-}
-
-class _PredicateObject {
-  Term _predicate;
-  Term _object;
-
-  _PredicateObject(this._predicate, this._object);
 }
 
 class TurtleParser extends TurtleDefinition {
   final ParserState _state;
-  int _blankNodeCount = 0;
-  final List<Quad> _sideQuads = [];
 
   TurtleParser(this._state);
 
   @override
-  Parser start() => super.start().map((_) => _sideQuads);
+  Parser<Iterable<Term>> start() => super.start().map((componentLists) {
+        var total = <Term>[];
+        for (BuiltList<Term> l in componentLists) {
+          total.addAll(l);
+        }
+        return total.build();
+      });
+
+  @override
+  Parser<BuiltList<Term>> directive() =>
+      super.directive().map((_) => <Term>[].build());
 
   @override
   Parser uchar() => super
@@ -58,36 +58,39 @@ class TurtleParser extends TurtleDefinition {
       .map((each) => String.fromCharCode(int.parse(each[1], radix: 16)));
 
   @override
-  Parser echar() => super.echar().map((each) => _escapeMap[each[1]]);
+  Parser echar() => super.echar().map((each) {
+        return _escapeMap[each[1]];
+      });
 
   @override
   Parser prefixID() => super.prefixID().map((each) {
         _state.namespaces[each[1]] = each[2];
-        return each[1];
       }, hasSideEffects: true);
 
   @override
   Parser sparqlPrefix() => super.sparqlPrefix().map((each) {
         _state.namespaces[each[1]] = each[2];
-        return each[1];
       }, hasSideEffects: true);
 
   @override
   Parser base() => super.base().map((each) {
         _state._setBase(each[1]);
-        return each[1];
       }, hasSideEffects: true);
 
   @override
   Parser sparqlBase() => super.sparqlBase().map((each) {
         _state._setBase(each[1]);
-        return each[1];
       }, hasSideEffects: true);
 
   @override
   Parser iriRef() => super.iriRef().map((each) {
-        // TODO: Perform relative IRI resolution.
-        return each[1];
+        String iriVal = each[1];
+        var relative = !iriVal
+            .startsWith(RegExp(r'[a-z][a-z0-9+.-]*:', caseSensitive: false));
+        if (relative) {
+          iriVal = _resolveRelativeIRI(iriVal) ?? "";
+        }
+        return iriVal;
       });
 
   @override
@@ -97,43 +100,46 @@ class TurtleParser extends TurtleDefinition {
   Parser stringLiteral() => super.stringLiteral().map((each) => each[1]);
 
   @override
-  Parser langTag() => super.langTag().map((each) => each[1]);
-
-  @override
   Parser rdfLiteral() => super.rdfLiteral().map((each) {
         String val = each[0];
         if (each[1] != null) {
-          // It's a data type.
-          if (each[1] is NamedNode) {
-            return LiteralTerm.fromDataType(val, each[1]);
+          // Some kind of suffix.
+          String sep = each[1][0];
+          if (sep == "@") {
+            return LiteralTerm.languageString(val, each[1][1]);
           }
-          // It's a language string.
-          return LiteralTerm.languageString(val, each[1]);
+          // Must be a data type specifier.
+          return LiteralTerm.fromDataType(val, each[1][1]);
         }
+        // No suffix. Treat as a string literal.
         return LiteralTerm.fromString(val);
       });
 
   @override
-  Parser integer() =>
-      super.integer().map((each) => LiteralTerm.fromInt(int.parse(each)));
+  Parser integer() => super
+      .integer()
+      .map((each) => LiteralTerm.fromDataType(each, NamedNode(Xsd.integer)));
 
   @override
-  Parser double() =>
-      super.double().map((each) => LiteralTerm.fromDouble(num.parse(each)));
+  Parser double() => super
+      .double()
+      .map((each) => LiteralTerm.fromDataType(each, NamedNode(Xsd.double)));
 
   @override
-  Parser decimal() =>
-      super.decimal().map((each) => LiteralTerm.fromDecimal(num.parse(each)));
+  Parser decimal() => super
+      .decimal()
+      .map((each) => LiteralTerm.fromDataType(each, NamedNode(Xsd.decimal)));
 
   @override
   Parser booleanLiteral() => super
       .booleanLiteral()
-      .map((each) => LiteralTerm.fromBool(each == "true"));
+      .map((each) => LiteralTerm.fromDataType(each, NamedNode(Xsd.boolean)));
 
   @override
   Parser verb() => super.verb().map((each) {
+        // Special case: "a" means type.
         if (each == "a") {
-          return typeDataType;
+          return NamedNode(Rdf.type);
         }
         // Just a regular old IRI.
         return each;
@@ -150,69 +156,96 @@ class TurtleParser extends TurtleDefinition {
 
   @override
   Parser collection() => super.collection().map((each) {
-        Term prev = _rdfNil;
-        for (int i = each.length; i >= 0; i--) {
-          var sub = BlankNode("rdf-${_blankNodeCount++}");
-          _sideQuads.add(Quad(sub, _rdfFirst, each[i]));
-          _sideQuads.add(Quad(sub, _rdfRest, prev));
-          prev = sub;
+        // Create a blank node.
+        Term lastNode = NamedNode(Rdf.nil);
+        var entries = each[1];
+        for (int i = entries.length - 1; i >= 0; i--) {
+          var bNodeEntries = [
+            PredicateObject(NamedNode(Rdf.first), entries[i]),
+            PredicateObject(NamedNode(Rdf.rest), lastNode),
+          ];
+          lastNode = BlankNodeGraph(bNodeEntries.build());
         }
-        return prev;
-      }, hasSideEffects: true);
+        return lastNode;
+      });
+
   @override
   Parser blankNodeLabel() =>
-      super.blankNodeLabel().map((each) => BlankNode(each[1]));
+      super.blankNodeLabel().map((each) => BlankNodeLabel(each[1]));
   @override
-  Parser anon() => super
-      .anon()
-      .map((_) => BlankNode("anon-${_blankNodeCount++}"), hasSideEffects: true);
+  Parser anon() =>
+      super.anon().map((_) => BlankNodeGraph(<PredicateObject>[].build()));
 
   @override
   Parser predicateObjectList() => super.predicateObjectList().map((each) {
         // Emit a List<PredicateObject>
-        var output = <_PredicateObject>[];
+        var output = <PredicateObject>[];
         for (var predObjList in each) {
           Term pred = predObjList[0];
           for (Term obj in predObjList[1]) {
-            output.add(_PredicateObject(pred, obj));
+            output.add(PredicateObject(pred, obj));
           }
         }
-        return output;
+        return output.build();
       });
 
   @override
   Parser blankNodePropertyList() => super.blankNodePropertyList().map((each) {
         // Create a new blank node.
-        BlankNode sub = BlankNode("rdf-${_blankNodeCount++}");
-        for (_PredicateObject predObj in each[1]) {
-          _sideQuads.add(Quad(sub, predObj._predicate, predObj._object));
-        }
-        return sub;
-      }, hasSideEffects: true);
+        return BlankNodeGraph(each[1]);
+      });
 
   @override
-  Parser triples() => super.triples().map((each) {
+  Parser<BuiltList<Term>> triples() => super.triples().map((each) {
+        var tripleNodes = <Quad>[];
         Term sub = each[0];
-        List<_PredicateObject> predObs = each[1] ?? [];
+        BuiltList<PredicateObject> predObs = each[1] ?? [];
         for (var predOb in predObs) {
-          _sideQuads.add(Quad(sub, predOb._predicate, predOb._object));
+          tripleNodes.add(Quad(sub, predOb.predicate, predOb.object));
         }
-        return sub;
-      }, hasSideEffects: true);
+        return tripleNodes.build();
+      });
+
+  String? _resolveRelativeIRI(String iri) {
+    var base = _state._basePath;
+    if (base == null) {
+      throw Exception(
+          "unable to resolve relative iri $iri -- no base provided");
+    }
+    if (iri.isEmpty) {
+      return base;
+    }
+    switch (iri[0]) {
+      case '#':
+        return base + iri;
+      case '?':
+        return base.replaceAll(RegExp(r"(?:\?.*)?$"), iri);
+      case '/':
+        return (iri[1] == '/' ? _state._baseScheme : _state._baseRoot) ??
+            "" + _removeDotSegments(iri);
+      default:
+        return RegExp('^[^/:]*:').hasMatch(iri)
+            ? null
+            : _removeDotSegments(base + iri);
+    }
+  }
+
+  String _removeDotSegments(String iri) {
+    Uri parsed = Uri.parse(iri);
+    return parsed.normalizePath().toString();
+  }
 }
 
-// TODO: Handle emitting quads.
-// Using state to track... state... may not be the right idea.
-// Hard to "push" into one state and "pop" out of another. Instead,
-// rethink this into how to build the objects we want to be able to
-// emit.
+// TODO: Streaming parsing -- return Stream<Term>.
 
-Result<List<Quad>> parseTurtle(String turtle) {
+Result<Iterable<Term>> parseTurtle(String turtle, {String baseUrl = ""}) {
   var state = ParserState();
+  if (baseUrl.isNotEmpty) {
+    state._setBase(baseUrl);
+  }
   var parser = TurtleParser(state);
-  var built = parser.build();
-  var res = built.parse(turtle);
-  return res.map((_) => parser._sideQuads);
+  Parser<Iterable<Term>> built = parser.build();
+  return built.parse(turtle);
 }
 
 const _escapeMap = {
